@@ -20,14 +20,14 @@ const decoder = new TextDecoder("utf-8");
 function serveIndexHtml(): Promise<Response> {
     const indexHtml = `
 <!DOCTYPE html>
-<html>
+<html lang="en-US">
 <head>
     <title>dnd binary upload</title>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 </head>
 <style>
 html {
-    font-family: Arial;
+    font-family: Arial, sans-serif;
 }
 </style>
 <script type="application/javascript">
@@ -100,43 +100,48 @@ function serveFallback(_req: ServerRequest, e: Error): Promise<Response> {
     }
 }
 
+/**
+ *
+ * @param req - expecting multipart form upload
+ */
 async function serveUploadFile(req: ServerRequest): Promise<Response> {
     let result = '';
-    try {
-        const form = await multiParser(req) as Form;
-        if (form) {
-            console.log(form)
-        }
-        const myFile = form.files.myFile as FormFile;
-        try {
-            await Deno.mkdir('tmpUpload');
-        } catch(e){
-            console.log('tmpUpload', e.message)
-        }
-        await Deno.writeFile('./tmpUpload/myFile.zip', myFile.content)
+    // Getting uploaded file
+    const form = await multiParser(req) as Form;
+    if (form) {
+        console.log(form)
+    }
+    const myFile = form.files.myFile as FormFile;
 
-        try {
-            await Deno.remove('tmpUnzip', { recursive: true });
-        } catch (e) {
-            console.log('tmpUnzip', e.message)
-        }
-        const destPath = await unZipFromFile('./tmpUpload/myFile.zip', 'tmpUnzip')
-        console.log('destPath', destPath)
-        if (destPath) {
-            const phrasesByFilename = await getPhrasesByPath(destPath);
-            const lines = [] as string[];
-            for (const filename in phrasesByFilename){
-                lines.push(
-                    `----> ${filename}`,
-                    `"${phrasesByFilename[filename].join(`" "`)}"`
-                );
-            }
-            result = lines.join('\n');
-        }
+    // Writing out to temp folder
+    try {
+        await Deno.mkdir('tmpUpload');
     } catch (e) {
-        console.error(e)
-        result = e.message
-    } finally {
+        console.log('tmpUpload', e.message)
+    }
+    await Deno.writeFile('./tmpUpload/myFile.zip', myFile.content)
+
+    // Unzipping to temp folder
+    try {
+        await Deno.remove('tmpUnzip', { recursive: true });
+    } catch (e) {
+        console.log('tmpUnzip', e.message)
+    }
+    const destPath = await unZipFromFile('./tmpUpload/myFile.zip', 'tmpUnzip')
+    console.log('destPath', destPath)
+    if (destPath) {
+        const phrasesByFilename = await getPhrasesByPath(destPath);
+
+        // Formatting by lines
+        const lines = [] as string[];
+        for (const filename in phrasesByFilename) {
+            if (phrasesByFilename.hasOwnProperty(filename))
+            lines.push(
+                `----> ${filename}`,
+                `"${phrasesByFilename[filename].join(`" "`)}"`
+            );
+        }
+        result = lines.join('\n');
     }
     return Promise.resolve({
         status: 200,
@@ -144,46 +149,45 @@ async function serveUploadFile(req: ServerRequest): Promise<Response> {
     });
 }
 
+/**
+ *
+ * @param path - path that contains dialogflow intents
+ */
 async function getPhrasesByPath(path: string): Promise<Record<string, string[]>> {
-    let phrasesByFilename = {} as {[filename: string]: string[]}
-    try {
-        const userSaysFiles = [] as string[];
-        for await (const dirEntry of Deno.readDir(path)) {
-            console.log(dirEntry.name);
-            if (dirEntry.isDirectory && dirEntry.name === 'intents') {
-                for await (const dirEntry2 of Deno.readDir(`${path}/intents`)) {
-                    if (dirEntry2.isFile && dirEntry2.name.endsWith('_usersays_en.json')) {
-                        userSaysFiles.push(dirEntry2.name);
-                    }
+    // Getting 'usersays' filenames in 'intents' directory
+    const userSaysFiles = [] as string[];
+    for await (const dirEntry of Deno.readDir(path)) {
+        console.log(dirEntry.name);
+        if (dirEntry.isDirectory && dirEntry.name === 'intents') {
+            for await (const dirEntry2 of Deno.readDir(`${path}/intents`)) {
+                if (dirEntry2.isFile && dirEntry2.name.endsWith('_usersays_en.json')) {
+                    userSaysFiles.push(dirEntry2.name);
                 }
             }
         }
-        const allPhrases = await Promise.all(
-            userSaysFiles.map(async (filename) => {
-                const filedata = await Deno.readFile(`${path}/intents/${filename}`)
-                const phrases = JSON.parse(
-                    decoder.decode(filedata)
-                ) as {
-                    data: { text: string }[]
-                }[];
-                return phrases.map((phrase) => {
-                    return phrase.data
-                        .map((data: { text: string }) => data.text)
-                        .join('');
-                })
-            })
-        )
-        phrasesByFilename = userSaysFiles.reduce<Record<string, string[]>>(
-            (acc, filename, index) => {
-                acc[filename] = allPhrases[index];
-                return acc;
-            }, {})
-
-    } catch (err) {
-        console.error(err)
-    } finally {
     }
-    return phrasesByFilename;
+    // Parsing phrases from files
+    const allPhrases = await Promise.all(
+        userSaysFiles.map(async (filename) => {
+            const filedata = await Deno.readFile(`${path}/intents/${filename}`)
+            const phrases = JSON.parse(
+                decoder.decode(filedata)
+            ) as {
+                data: { text: string }[]
+            }[];
+            return phrases.map((phrase) => {
+                return phrase.data
+                    .map((data: { text: string }) => data.text)
+                    .join('');
+            })
+        })
+    )
+    // Compiling phrases by filename
+    return userSaysFiles.reduce<Record<string, string[]>>(
+        (acc, filename, index) => {
+            acc[filename] = allPhrases[index];
+            return acc;
+        }, {})
 }
 
 function main(): void {
